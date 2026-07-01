@@ -1,0 +1,22 @@
+:root {
+  --bg: #f4f1e8;
+  --paper: #fffdf6;
+  --ink: #1b1b1a;
+  --muted: #79766d;
+  --line: #e0dccf;
+  --accent: #b8472a;
+  --accent-soft: #fbe9e1;
+  --error: #b94a3a;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+#app {
+  min-height: 100vh;
+}
