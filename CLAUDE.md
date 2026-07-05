@@ -18,28 +18,18 @@ Stack: Vue 3 (`<script setup>`) + TypeScript + Vite. No router, no state-managem
 
 ## Core data flow
 
-The heart of the app is a pipeline, not a component tree:
-
-1. A `.notation` file is YAML-ish frontmatter (`title`, `subtitle`, `meter`, `key`) + a body of **custom text notation**, one measure per line. Parsed/serialized by `src/lib/frontmatter.ts` into a `NotationDoc` (`src/lib/types.ts`).
-2. `src/lib/converter.ts` (`toAbc()`) converts that custom notation body into **ABC notation** — the real, complex work of this codebase.
+1. A `.notation` file is YAML-ish frontmatter (`title`, `subtitle`, `meter`, `key`) + a body of **raw ABC notation** (tune body only, no header lines). Parsed/serialized by `src/lib/frontmatter.ts` into a `NotationDoc` (`src/lib/types.ts`). Unknown frontmatter keys (e.g. `mode:` from older files) are ignored on parse and dropped on the next save.
+2. `abcHeader()` in `src/lib/abc.ts` prepends the generated 5-line tune header (`X:1`, `T:`, `M:` from meter, `L:1/8`, `K:` from key) to the body. Meter and key come from the toolbar dropdowns, never from the text.
 3. `abcjs` renders the ABC string to SVG. **`abcjs` is loaded as a global `ABCJS` from a CDN `<script>` in `index.html`** — it is NOT an npm dependency and NOT imported. Its type is hand-declared in `src/env.d.ts`. Rendering therefore only works in a browser, never in Node.
 
-`src/App.vue` bootstraps the saved folder handle (persisted in IndexedDB via `storage.ts`), handles file CRUD, and auto-saves with a 400 ms debounce. `Editor.vue` re-runs `toAbc()` on every change to text/meter/key and re-renders. `Sidebar.vue` is the file list + folder picker.
+`src/App.vue` bootstraps the saved folder handle (persisted in IndexedDB via `storage.ts`), handles file CRUD, and auto-saves with a 400 ms debounce. `Editor.vue` re-renders on every change to text/meter/key. `Sidebar.vue` is the file list + folder picker.
 
-## The custom notation grammar (`converter.ts`)
+## UI layout
 
-Base duration unit is the eighth note (ABC `L:1/8`). Understanding this grammar is essential before touching the converter:
+- `App.vue` renders a sticky top bar (hamburger + wordmark, height `--topbar-h` from `styles.css`) above `Editor.vue`. The hamburger toggles `Sidebar.vue`, which is an **offcanvas panel** (fixed, slides in from the left over a backdrop; closes on backdrop click, ×, Escape, file select, or "+ Neu").
+- `Editor.vue` is a **split view**: rendered page (left) and the ABC textarea panel (right), separated by a draggable splitter (pointer capture, min widths 320/280 px). The left-pane ratio persists in localStorage under `notation.splitRatio`. The Volltext button toggles the right panel; when hidden the page takes the full width. Editor's own toolbar sticks below the top bar (`top: var(--topbar-h)`).
+- SVG export in `App.vue` reads the DOM via the selector `.editor .sheet svg` — keep that DOM path intact.
 
-- **Note token**: `[duration][pitch][accidental][octave]`, regex `NOTE_RE`. E.g. `4.b` = dotted quarter B, `8g` = eighth G, `16c#2` = sixteenth C-sharp in the higher octave.
-  - Duration: `1 2 4 8 16 32`; trailing `.`/`..` = 1.5×/1.75×.
-  - Pitch: `a`–`g`; `p` = rest (→ ABC `z`).
-  - Accidental: `#`, `##`, `b`, `bb`, `!` (natural).
-  - Octave digit: `0`=kleine, `1`=eingestrichene (default), `2`=zweigestrichene, `3+`.
-- **Duration carry-over**: a duration prefix persists to following bare pitches until changed (tracked via `durRef`).
-- **Ties**: underscore, e.g. `4a_8a`. **Triplets**: `trio8(g g b)`. **Multi-measure rest**: `Nx`, e.g. `15x` → ABC `ZN`.
-- **Bar/volta markers** are stripped from the ends of a line by `stripBarMarkers`: `|` `|:` (opening), `|` `:|` `|]` (closing), `[1`/`[2` (volta).
-- `%` starts a comment; blank lines are skipped. Auto-beaming is grouped by beat via `beatUnitsFromMeter`.
+## Gotcha: warning line numbers
 
-## Gotcha: duplicated parsing logic
-
-The canonical parsers live in `converter.ts` (`MULTIREST_RE`, `stripBarMarkers`). `Editor.vue` re-implements a stripped-down copy in `multiRestN()` (~line 72) to compute measure numbers/labels and to map clicked SVG measures back to source lines (`visualToSource`, since one `Nx` rest spans multiple rendered measures). **If you change multi-rest or bar-marker syntax, update both files** or the visual measure-to-source mapping will drift.
+`Editor.vue`'s `cleanWarning()` remaps abcjs `Music Line:N` warnings to body line numbers by subtracting **5** — the exact number of header lines `abcHeader()` generates. If a header line is ever added (e.g. `Q:`), update both or the reported `Zeile N` drifts.

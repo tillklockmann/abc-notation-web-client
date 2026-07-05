@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed, nextTick, onMounted } from 'vue';
-import { toAbc, abcHeader } from '../lib/converter';
-import type { NotationDoc, NotationMode } from '../lib/types';
+import { abcHeader } from '../lib/abc';
+import type { NotationDoc } from '../lib/types';
 
 const props = defineProps<{
   doc: NotationDoc;
@@ -11,7 +11,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:doc', value: NotationDoc): void;
-  (e: 'save'): void;
   (e: 'export-svg'): void;
 }>();
 
@@ -25,8 +24,8 @@ watch(
     local.subtitle = next.subtitle;
     local.meter = next.meter;
     local.key = next.key;
-    local.mode = next.mode;
     local.text = next.text;
+    nextTick(() => { updateGutter(); onBulkScroll(); });
   },
   { deep: true }
 );
@@ -39,77 +38,26 @@ function emitUpdate() {
 const sheetRef = ref<HTMLDivElement | null>(null);
 const bulkRef = ref<HTMLTextAreaElement | null>(null);
 const gutterRef = ref<HTMLDivElement | null>(null);
-const popInputRef = ref<HTMLInputElement | null>(null);
-const popoverRef = ref<HTMLDivElement | null>(null);
 const titleRef = ref<HTMLHeadingElement | null>(null);
 const subtitleRef = ref<HTMLDivElement | null>(null);
+const splitRef = ref<HTMLDivElement | null>(null);
 
 // --- State --------------------------------------------------------------
 const errors = ref<string[]>([]);
-const drawerOpen = ref(false);
-const editingIdx = ref<number | null>(null);
-const previewBody = ref<string | null>(null);
-const popoverVisible = ref(false);
-const popoverPos = reactive({ top: '0px', left: '0px' });
-const popoverInput = ref('');
-const popoverLabel = ref('');
-let lastAbc = '';
-let visualToSource: number[] = [];
+const panelOpen = ref(true);
+const splitRatio = ref(loadSplitRatio());
+const dragging = ref(false);
 
-interface MeasureRef { lineIdx: number; body: string }
-function getMeasureRefs(): MeasureRef[] {
-  const lines = local.text.split('\n');
-  const refs: MeasureRef[] = [];
-  lines.forEach((line, idx) => {
-    const stripped = line.replace(/%.*$/, '').trim();
-    if (!stripped) return;
-    refs.push({ lineIdx: idx, body: stripped });
-  });
-  return refs;
-}
+const MIN_LEFT = 320;
+const MIN_RIGHT = 280;
+const RATIO_KEY = 'notation.splitRatio';
 
-// Returns N if the line is an Nx multi-measure rest (mirroring the parser),
-// otherwise 0. Tolerates surrounding bar/volta markers.
-function multiRestN(body: string): number {
-  const toks = body.split(/\s+/).filter(Boolean);
-  while (toks.length && (toks[0] === '|' || toks[0] === '|:' || /^\[[12]$/.test(toks[0]))) toks.shift();
-  while (toks.length && (toks[toks.length - 1] === '|' || toks[toks.length - 1] === ':|' || toks[toks.length - 1] === '|]')) toks.pop();
-  if (toks.length !== 1) return 0;
-  const m = toks[0].match(/^(\d+)x$/);
-  return m ? parseInt(m[1], 10) : 0;
-}
-
-function measureFromStartChar(abcSrc: string, startChar?: number): number {
-  if (typeof startChar !== 'number') return -1;
-  let count = 0;
-  for (let i = 0; i < startChar && i < abcSrc.length; i++) {
-    if (abcSrc.charCodeAt(i) === 124) count++;
-  }
-  return count;
+function loadSplitRatio(): number {
+  const v = Number(localStorage.getItem(RATIO_KEY));
+  return Number.isFinite(v) && v >= 0.2 && v <= 0.85 ? v : 0.6;
 }
 
 // --- Rendering ----------------------------------------------------------
-function onSheetClick(
-  abcElem: any,
-  _tn: number,
-  _classes: string,
-  _analysis: any,
-  _drag: any,
-  mouseEvent: MouseEvent
-) {
-  if (!abcElem) return;
-  const visualIdx = measureFromStartChar(lastAbc, abcElem.startChar);
-  if (visualIdx < 0 || visualIdx >= visualToSource.length) return;
-  const srcIdx = visualToSource[visualIdx];
-  const refs = getMeasureRefs();
-  if (srcIdx >= refs.length) return;
-  if (mouseEvent && typeof mouseEvent.clientY === 'number') {
-    popoverPos.top = `${window.scrollY + mouseEvent.clientY + 16}px`;
-    popoverPos.left = `${Math.max(8, window.scrollX + mouseEvent.clientX - 20)}px`;
-  }
-  openPopover(srcIdx);
-}
-
 // abcjs warnings embed HTML (a <span> around the offending character,
 // entity-encoded context); the errors block renders escaped text.
 // Line numbers count the 5 generated header lines, so remap to body lines.
@@ -126,36 +74,7 @@ function cleanWarning(w: string): string {
 
 function render() {
   if (!sheetRef.value) return;
-  const isAbc = local.mode === 'abc';
-  let abc: string;
-  if (isAbc) {
-    abc = abcHeader({ title: '', meter: local.meter, key: local.key }) + local.text + '\n';
-    errors.value = [];
-    visualToSource = [];
-  } else {
-    let textForRender = local.text;
-    if (editingIdx.value !== null && previewBody.value !== null) {
-      const refs = getMeasureRefs();
-      if (editingIdx.value < refs.length) {
-        const lines = local.text.split('\n');
-        lines[refs[editingIdx.value].lineIdx] = previewBody.value;
-        textForRender = lines.join('\n');
-      }
-    }
-    const result = toAbc(textForRender, {
-      title: '',
-      meter: local.meter,
-      key: local.key,
-    });
-    abc = result.abc;
-    errors.value = result.errors;
-    visualToSource = [];
-    result.measures.forEach((m, srcIdx) => {
-      const span = m.multiRest ?? 1;
-      for (let k = 0; k < span; k++) visualToSource.push(srcIdx);
-    });
-  }
-  lastAbc = abc;
+  const abc = abcHeader({ title: '', meter: local.meter, key: local.key }) + local.text + '\n';
   try {
     const tunes = ABCJS.renderAbc(sheetRef.value, abc, {
       responsive: 'resize',
@@ -163,124 +82,21 @@ function render() {
       scale: 1.15,
       paddingtop: 4,
       paddingbottom: 4,
-      clickListener: isAbc ? undefined : onSheetClick,
     });
-    if (isAbc) {
-      errors.value = (tunes ?? []).flatMap((t) => t?.warnings ?? []).map(cleanWarning);
-    }
+    errors.value = (tunes ?? []).flatMap((t) => t?.warnings ?? []).map(cleanWarning);
   } catch (err) {
     errors.value = [`ABC-Fehler: ${err instanceof Error ? err.message : String(err)}`];
   }
 }
 
-// Re-render whenever the doc / meter / key / mode change.
+// Re-render whenever the doc / meter / key change.
 watch(
-  () => [local.text, local.meter, local.key, local.mode],
+  () => [local.text, local.meter, local.key],
   () => render(),
   { flush: 'post' }
 );
 
-// Close the measure popover before the mode switch re-renders.
-watch(
-  () => local.mode,
-  () => {
-    if (popoverVisible.value) closePopover();
-  }
-);
-
-// --- Popover ------------------------------------------------------------
-function openPopover(idx: number) {
-  if (local.mode === 'abc') return;
-  const refs = getMeasureRefs();
-  if (idx >= refs.length) return;
-  editingIdx.value = idx;
-  previewBody.value = null;
-  // m-numbering accounts for Nx blocks in earlier rows.
-  let startBar = 1;
-  for (let k = 0; k < idx; k++) {
-    startBar += multiRestN(refs[k].body) || 1;
-  }
-  const span = multiRestN(refs[idx].body) || 1;
-  popoverLabel.value = span > 1 ? `m${startBar}-m${startBar + span - 1}` : `m${startBar}`;
-  popoverInput.value = refs[idx].body;
-  popoverVisible.value = true;
-  nextTick(() => {
-    popInputRef.value?.focus();
-    popInputRef.value?.select();
-  });
-}
-
-function closePopover() {
-  popoverVisible.value = false;
-  editingIdx.value = null;
-  previewBody.value = null;
-  render();
-}
-
-function commitPopover() {
-  if (editingIdx.value === null) return;
-  const idx = editingIdx.value;
-  const refs = getMeasureRefs();
-  if (idx < refs.length) {
-    const lines = local.text.split('\n');
-    lines[refs[idx].lineIdx] = popoverInput.value.trim();
-    local.text = lines.join('\n');
-    emitUpdate();
-    updateGutter();
-  }
-  previewBody.value = null;
-  editingIdx.value = null;
-  popoverVisible.value = false;
-  render();
-}
-
-function deleteCurrentMeasure() {
-  if (editingIdx.value === null) return;
-  if (!confirm(`Takt ${popoverLabel.value} löschen?`)) return;
-  const refs = getMeasureRefs();
-  const idx = editingIdx.value;
-  if (idx < refs.length) {
-    const lines = local.text.split('\n');
-    lines.splice(refs[idx].lineIdx, 1);
-    local.text = lines.join('\n');
-    emitUpdate();
-    updateGutter();
-  }
-  previewBody.value = null;
-  editingIdx.value = null;
-  popoverVisible.value = false;
-  render();
-}
-
-function onPopoverInput() {
-  if (editingIdx.value === null) return;
-  previewBody.value = popoverInput.value;
-  render();
-}
-
-function onPopoverKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter') { e.preventDefault(); commitPopover(); }
-  else if (e.key === 'Escape') closePopover();
-  else if (e.key === 'Tab') {
-    e.preventDefault();
-    const curr = editingIdx.value;
-    commitPopover();
-    const refs = getMeasureRefs();
-    if (!refs.length || curr === null) return;
-    const next = (curr + 1) % refs.length;
-    setTimeout(() => openPopover(next), 60);
-  }
-}
-
-function onDocMousedown(e: MouseEvent) {
-  if (!popoverVisible.value) return;
-  const t = e.target as Node;
-  if (popoverRef.value?.contains(t)) return;
-  if (sheetRef.value?.contains(t)) return;
-  closePopover();
-}
-
-// --- Drawer / gutter ----------------------------------------------------
+// --- Text panel / gutter --------------------------------------------------
 function updateGutter() {
   if (!gutterRef.value) return;
   const count = local.text.split('\n').length || 1;
@@ -301,13 +117,38 @@ function onBulkScroll() {
   gutterRef.value.style.marginTop = `-${bulkRef.value.scrollTop}px`;
 }
 
-function toggleDrawer() {
-  drawerOpen.value = !drawerOpen.value;
-  if (drawerOpen.value) nextTick(() => { updateGutter(); onBulkScroll(); });
+function togglePanel() {
+  panelOpen.value = !panelOpen.value;
+  if (panelOpen.value) nextTick(() => { updateGutter(); onBulkScroll(); });
+}
+
+// --- Splitter -------------------------------------------------------------
+function onSplitterDown(e: PointerEvent) {
+  dragging.value = true;
+  (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function onSplitterMove(e: PointerEvent) {
+  if (!dragging.value || !splitRef.value) return;
+  const rect = splitRef.value.getBoundingClientRect();
+  if (rect.width < MIN_LEFT + MIN_RIGHT + 8) return;
+  const min = MIN_LEFT / rect.width;
+  const max = 1 - MIN_RIGHT / rect.width;
+  splitRatio.value = Math.min(max, Math.max(min, (e.clientX - rect.left) / rect.width));
+}
+
+function onSplitterUp(e: PointerEvent) {
+  if (!dragging.value) return;
+  dragging.value = false;
+  (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  localStorage.setItem(RATIO_KEY, String(splitRatio.value));
 }
 
 function onPrint() {
-  if (popoverVisible.value) closePopover();
   window.print();
 }
 
@@ -332,16 +173,9 @@ function onKeyChange(e: Event) {
   local.key = (e.target as HTMLSelectElement).value;
   emitUpdate();
 }
-function onModeChange(e: Event) {
-  local.mode = (e.target as HTMLSelectElement).value as NotationMode;
-  // In ABC mode the drawer is the only editing surface.
-  if (local.mode === 'abc' && !drawerOpen.value) toggleDrawer();
-  emitUpdate();
-}
 
 // --- Boot ---------------------------------------------------------------
 onMounted(() => {
-  document.addEventListener('mousedown', onDocMousedown);
   // Initial population of contenteditable text and gutter
   if (titleRef.value) titleRef.value.textContent = local.title;
   if (subtitleRef.value) subtitleRef.value.textContent = local.subtitle;
@@ -365,9 +199,6 @@ watch(
 
 const titleEmpty = computed(() => !local.title);
 const subtitleEmpty = computed(() => !local.subtitle);
-const measureCount = computed(() =>
-  getMeasureRefs().reduce((acc, r) => acc + (multiRestN(r.body) || 1), 0)
-);
 </script>
 
 <template>
@@ -389,99 +220,78 @@ const measureCount = computed(() =>
           <option>Am</option><option>Em</option><option>Dm</option><option>Gm</option>
         </select>
       </span>
-      <span class="field">Modus
-        <select :value="local.mode" @change="onModeChange">
-          <option value="custom">Eigene</option>
-          <option value="abc">ABC</option>
-        </select>
-      </span>
       <span class="status" :class="{ on: saving }">
         {{ saving ? 'speichert …' : (hasFolder ? 'gespeichert' : 'lokal') }}
       </span>
       <span class="spacer"></span>
-      <button :class="['toggle', drawerOpen ? 'on' : '']" @click="toggleDrawer">Volltext</button>
+      <button :class="['toggle', panelOpen ? 'on' : '']" @click="togglePanel">Volltext</button>
       <button @click="emit('export-svg')">SVG</button>
       <button class="primary" @click="onPrint">PDF</button>
     </header>
 
-    <article class="page">
-      <h2
-        ref="titleRef"
-        class="title"
-        contenteditable="true"
-        spellcheck="false"
-        :data-empty="titleEmpty"
-        data-placeholder="Titel"
-        @input="onTitleInput"
-        @keydown.enter.prevent="($event.target as HTMLElement).blur()"
-      ></h2>
+    <div class="split" ref="splitRef">
       <div
-        ref="subtitleRef"
-        class="subtitle"
-        contenteditable="true"
-        spellcheck="false"
-        :data-empty="subtitleEmpty"
-        data-placeholder="Untertitel"
-        @input="onSubtitleInput"
-        @keydown.enter.prevent="($event.target as HTMLElement).blur()"
+        class="pane-page"
+        :class="{ constrained: panelOpen }"
+        :style="panelOpen ? { flexBasis: (splitRatio * 100) + '%' } : undefined"
+      >
+        <article class="page">
+          <h2
+            ref="titleRef"
+            class="title"
+            contenteditable="true"
+            spellcheck="false"
+            :data-empty="titleEmpty"
+            data-placeholder="Titel"
+            @input="onTitleInput"
+            @keydown.enter.prevent="($event.target as HTMLElement).blur()"
+          ></h2>
+          <div
+            ref="subtitleRef"
+            class="subtitle"
+            contenteditable="true"
+            spellcheck="false"
+            :data-empty="subtitleEmpty"
+            data-placeholder="Untertitel"
+            @input="onSubtitleInput"
+            @keydown.enter.prevent="($event.target as HTMLElement).blur()"
+          ></div>
+          <div ref="sheetRef" class="sheet"></div>
+        </article>
+        <div class="errors" v-show="errors.length">
+          <div v-for="(e, i) in errors" :key="i">{{ e }}</div>
+        </div>
+      </div>
+
+      <div
+        class="splitter"
+        v-show="panelOpen"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Ansicht teilen"
+        @pointerdown="onSplitterDown"
+        @pointermove="onSplitterMove"
+        @pointerup="onSplitterUp"
+        @pointercancel="onSplitterUp"
       ></div>
-      <div ref="sheetRef" class="sheet" :class="{ static: local.mode === 'abc' }"></div>
-      <div class="hint" v-if="local.mode !== 'abc'">
-        Auf einen Takt klicken zum Bearbeiten ·
-        <kbd>Tab</kbd> springt zum nächsten ·
-        <kbd>Enter</kbd> speichert ·
-        <kbd>Esc</kbd> schließt ·
-        <span class="meta">{{ measureCount }} Takte</span>
-      </div>
-      <div class="hint" v-else>ABC-Modus · Noten im „Volltext“-Editor bearbeiten</div>
-    </article>
 
-    <section class="drawer" v-show="drawerOpen">
-      <h3>{{ local.mode === 'abc' ? 'Volltext · ABC-Notation' : 'Volltext · eine Zeile pro Takt' }}</h3>
-      <div class="code-block">
-        <div class="gutter"><div ref="gutterRef" class="gutter-inner"></div></div>
-        <textarea
-          ref="bulkRef"
-          :value="local.text"
-          spellcheck="false"
-          wrap="off"
-          @input="onBulkInput"
-          @scroll="onBulkScroll"
-        ></textarea>
-      </div>
-      <div class="hint" v-if="local.mode !== 'abc'">
-        Leere Zeilen und Kommentare (<code>%</code>) werden ignoriert.
-      </div>
-      <div class="hint" v-else>
-        Roh-ABC (Tune-Body) · Kommentare mit <code>%</code> · Leerzeilen beenden das Stück.
-      </div>
-    </section>
-
-    <div class="errors" v-show="errors.length">
-      <div v-for="(e, i) in errors" :key="i">{{ e }}</div>
-    </div>
-
-    <div
-      ref="popoverRef"
-      class="popover"
-      v-show="popoverVisible"
-      :style="{ top: popoverPos.top, left: popoverPos.left }"
-    >
-      <span class="label">{{ popoverLabel }}</span>
-      <input
-        ref="popInputRef"
-        v-model="popoverInput"
-        type="text"
-        spellcheck="false"
-        @input="onPopoverInput"
-        @keydown="onPopoverKeydown"
-      />
-      <div class="actions">
-        <span class="hint-inline">↵ speichern · ⇥ nächster · Esc abbrechen</span>
-        <button class="danger" @click="deleteCurrentMeasure">Löschen</button>
-        <button @click="closePopover">Abbrechen</button>
-        <button class="primary" @click="commitPopover">Speichern</button>
-      </div>
+      <section class="drawer" v-show="panelOpen">
+        <h3>Volltext · ABC-Notation</h3>
+        <div class="code-block">
+          <div class="gutter"><div ref="gutterRef" class="gutter-inner"></div></div>
+          <textarea
+            ref="bulkRef"
+            :value="local.text"
+            spellcheck="false"
+            wrap="off"
+            @input="onBulkInput"
+            @scroll="onBulkScroll"
+          ></textarea>
+        </div>
+        <div class="hint">
+          Roh-ABC (Tune-Body) · Kommentare mit <code>%</code> · Leerzeilen beenden das Stück.
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -503,7 +313,7 @@ const measureCount = computed(() =>
   align-items: center;
   gap: 12px;
   position: sticky;
-  top: 0;
+  top: var(--topbar-h);
   z-index: 20;
 }
 .editor-header .field {
@@ -549,8 +359,28 @@ const measureCount = computed(() =>
   border-color: var(--ink);
 }
 
+.split {
+  display: flex;
+  align-items: stretch;
+}
+.pane-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 22px;
+}
+.pane-page.constrained { flex: 0 0 auto; }
+
+.splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  border-left: 1px solid var(--line);
+  transition: background 100ms;
+  touch-action: none;
+}
+.splitter:hover { background: var(--accent-soft); }
+
 .page {
-  width: min(100%, 1240px);
+  max-width: 1240px;
   margin: 22px auto 30px;
   padding: 32px 44px;
   background: var(--paper);
@@ -585,10 +415,8 @@ const measureCount = computed(() =>
   color: #c8c4b8;
 }
 
-.sheet { margin-top: 22px; cursor: pointer; }
-.sheet.static { cursor: default; }
+.sheet { margin-top: 22px; }
 .sheet :deep(svg) { width: 100%; height: auto; display: block; }
-.sheet :deep(.abcjs-note_selected) { fill: var(--accent); }
 
 .hint {
   margin-top: 18px;
@@ -596,19 +424,12 @@ const measureCount = computed(() =>
   color: var(--muted);
   font-size: 13px;
 }
-.hint kbd {
-  font: 12px "JetBrains Mono", monospace;
-  background: #efece4;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-.hint .meta { margin-left: 12px; }
 
 .drawer {
-  width: min(100%, 1240px);
-  margin: 0 auto 60px;
-  padding: 0 44px;
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 22px 22px 60px;
 }
 .drawer h3 {
   font-size: 12px;
@@ -661,7 +482,7 @@ const measureCount = computed(() =>
 }
 
 .errors {
-  width: min(100%, 1240px);
+  max-width: 1240px;
   margin: 0 auto 18px;
   padding: 8px 12px;
   border: 1px solid var(--error);
@@ -672,71 +493,11 @@ const measureCount = computed(() =>
   white-space: pre-wrap;
 }
 
-.popover {
-  position: absolute;
-  z-index: 30;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 12px 30px rgba(20, 20, 20, 0.16);
-  padding: 14px 16px 12px;
-  min-width: 360px;
-}
-.popover::before {
-  content: '';
-  position: absolute;
-  top: -7px; left: 24px;
-  width: 12px; height: 12px;
-  background: #fff;
-  border-left: 1px solid var(--line);
-  border-top: 1px solid var(--line);
-  transform: rotate(45deg);
-}
-.popover .label {
-  font: 600 12px "JetBrains Mono", monospace;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 5px;
-  padding: 3px 7px;
-  display: inline-block;
-}
-.popover input {
-  width: 100%;
-  margin-top: 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 9px 10px;
-  font: 14px "JetBrains Mono", "SF Mono", Menlo, monospace;
-  outline: 0;
-}
-.popover input:focus { border-color: var(--accent); }
-.popover .actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  align-items: center;
-}
-.popover .hint-inline {
-  flex: 1;
-  color: var(--muted);
-  font-size: 11px;
-}
-.popover button {
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  font: 12px inherit;
-}
-.popover button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-.popover button.danger { color: var(--error); }
-.popover button.danger:hover { background: #fdf2ef; border-color: var(--error); }
-
 @media print {
-  .editor-header, .drawer, .popover, .hint, .errors { display: none !important; }
+  .editor-header, .drawer, .splitter, .hint, .errors { display: none !important; }
+  .split { display: block; }
+  .pane-page { flex: none; width: 100% !important; padding: 0; }
   .page { box-shadow: none; border: 0; max-width: none; margin: 0; padding: 12mm; }
-  .sheet { cursor: default; }
   body { background: #fff; }
 }
 </style>

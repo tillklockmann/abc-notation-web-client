@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import type { NotationFile } from '../lib/types';
 
 const props = defineProps<{
+  open: boolean;
   folderName: string | null;
   needsPermission: boolean;
   files: NotationFile[];
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: 'close'): void;
   (e: 'pick-folder'): void;
   (e: 'grant-permission'): void;
   (e: 'select', file: NotationFile): void;
@@ -36,9 +38,13 @@ const itemsView = computed(() => props.files.map(f => ({ ...f, rel: relTime(f.mo
 </script>
 
 <template>
-  <aside class="sidebar">
-    <div class="brand">
-      <h1>notation</h1>
+  <Transition name="fade">
+    <div v-if="open" class="backdrop" @click="emit('close')"></div>
+  </Transition>
+  <aside class="sidebar" :class="{ open }" :aria-hidden="!open">
+    <div class="panel-head">
+      <span class="panel-title">Menü</span>
+      <button class="icon" title="Schließen" @click="emit('close')">×</button>
     </div>
 
     <div class="folder">
@@ -101,28 +107,51 @@ const itemsView = computed(() => props.files.map(f => ({ ...f, rel: relTime(f.mo
 </template>
 
 <style scoped>
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(27, 27, 26, 0.35);
+  z-index: 40;
+}
+.fade-enter-active, .fade-leave-active { transition: opacity 180ms ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
 .sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 300px;
   background: #faf6ec;
   border-right: 1px solid var(--line);
-  width: 280px;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  position: sticky;
-  top: 0;
-  align-self: flex-start;
-  max-height: 100vh;
   overflow-y: auto;
+  z-index: 41;
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform 200ms ease, visibility 200ms;
+}
+.sidebar.open {
+  transform: translateX(0);
+  visibility: visible;
 }
 
-.brand {
-  padding: 16px 18px 8px;
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px 4px;
 }
-.brand h1 {
-  font-family: "Iowan Old Style", Georgia, serif;
-  font-size: 19px;
-  font-weight: 600;
-  margin: 0;
+.panel-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+@media print {
+  .sidebar, .backdrop { display: none !important; }
 }
 
 .folder {

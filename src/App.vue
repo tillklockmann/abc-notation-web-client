@@ -25,6 +25,7 @@ const currentFile = ref<NotationFile | null>(null);
 const doc = reactive<NotationDoc>({ ...EXAMPLE_DOC });
 const saving = ref(false);
 const dirty = ref(false);
+const menuOpen = ref(false);
 
 const folderName = computed(() => folder.value?.name ?? null);
 const currentId = computed(() => currentFile.value?.id ?? null);
@@ -33,7 +34,12 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 // --- Bootstrap ----------------------------------------------------------
 
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && menuOpen.value) menuOpen.value = false;
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', onKeydown);
   if (!supported) return;
   const saved = await getSavedFolder();
   if (!saved) return;
@@ -100,13 +106,13 @@ async function openFile(file: NotationFile) {
 
 async function onNew() {
   if (!folder.value) return;
+  menuOpen.value = false;
   const blank: NotationDoc = {
     title: 'Neues Stück',
     subtitle: '',
     meter: '4/4',
     key: 'C',
-    mode: 'custom',
-    text: '4p p p p',
+    text: 'z2 z2 z2 z2 |]',
   };
   const created = await createNotation(folder.value, blank);
   files.value = [created, ...files.value];
@@ -114,6 +120,7 @@ async function onNew() {
 }
 
 async function onSelect(file: NotationFile) {
+  menuOpen.value = false;
   await openFile(file);
 }
 
@@ -194,13 +201,24 @@ function onExportSvg() {
 </script>
 
 <template>
-  <div class="layout">
+  <div class="app">
+    <header class="topbar">
+      <button
+        class="hamburger"
+        aria-label="Menü"
+        :aria-expanded="menuOpen"
+        @click="menuOpen = !menuOpen"
+      >☰</button>
+      <h1 class="brand">notation</h1>
+    </header>
     <Sidebar
+      :open="menuOpen"
       :folder-name="folderName"
       :needs-permission="needsPermission"
       :files="files"
       :current-id="currentId"
       :supported="supported"
+      @close="menuOpen = false"
       @pick-folder="onPickFolder"
       @grant-permission="onGrantPermission"
       @select="onSelect"
@@ -221,18 +239,40 @@ function onExportSvg() {
 </template>
 
 <style scoped>
-.layout {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  min-height: 100vh;
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  background: #faf6ec;
+  border-bottom: 1px solid var(--line);
+}
+.hamburger {
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.hamburger:hover { background: rgba(0, 0, 0, 0.05); }
+.brand {
+  font-family: "Iowan Old Style", Georgia, serif;
+  font-size: 19px;
+  font-weight: 600;
+  margin: 0;
 }
 .main {
   min-width: 0;
-  min-height: 100vh;
 }
 
 @media print {
-  .layout { grid-template-columns: 1fr; }
-  aside { display: none !important; }
+  .topbar { display: none !important; }
 }
 </style>

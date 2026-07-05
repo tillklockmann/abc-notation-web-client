@@ -7,6 +7,7 @@
   --accent: #b8472a;
   --accent-soft: #fbe9e1;
   --error: #b94a3a;
+  --topbar-h: 48px;
 }
 
 * { box-sizing: border-box; }
