@@ -1,8 +1,11 @@
+export type NotationMode = 'custom' | 'abc';
+
 export interface NotationDoc {
   title: string;
   subtitle: string;
   meter: string;
   key: string;
+  mode: NotationMode;
   text: string;
 }
 
@@ -18,6 +21,7 @@ export const DEFAULT_DOC: NotationDoc = {
   subtitle: '',
   meter: '4/4',
   key: 'C',
+  mode: 'custom',
   text: '',
 };
 
@@ -26,6 +30,7 @@ export const EXAMPLE_DOC: NotationDoc = {
   subtitle: '2. Stimme · in B',
   meter: '4/4',
   key: 'C',
+  mode: 'custom',
   text: `4.b 8g 4p 8g g
 8.c2 16b b a 8g 4g 8p g
 4.a 8g 4p 8b 16b a

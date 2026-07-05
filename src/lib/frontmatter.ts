@@ -15,6 +15,7 @@ export function parse(content: string): NotationDoc {
     subtitle: meta.subtitle ?? '',
     meter: meta.meter || '4/4',
     key: meta.key || 'C',
+    mode: meta.mode === 'abc' ? 'abc' : 'custom',
     text: fm[2].replace(/\r\n/g, '\n').replace(/^\n+/, '').replace(/\n+$/, ''),
   };
 }
@@ -26,6 +27,7 @@ export function serialize(doc: NotationDoc): string {
     `subtitle: ${doc.subtitle}`,
     `meter: ${doc.meter}`,
     `key: ${doc.key}`,
+    `mode: ${doc.mode}`,
     '---',
     doc.text.replace(/\n+$/, ''),
     '',

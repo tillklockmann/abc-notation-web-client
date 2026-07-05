@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed, nextTick, onMounted } from 'vue';
-import { toAbc } from '../lib/converter';
-import type { NotationDoc } from '../lib/types';
+import { toAbc, abcHeader } from '../lib/converter';
+import type { NotationDoc, NotationMode } from '../lib/types';
 
 const props = defineProps<{
   doc: NotationDoc;
@@ -25,6 +25,7 @@ watch(
     local.subtitle = next.subtitle;
     local.meter = next.meter;
     local.key = next.key;
+    local.mode = next.mode;
     local.text = next.text;
   },
   { deep: true }
@@ -88,67 +89,108 @@ function measureFromStartChar(abcSrc: string, startChar?: number): number {
 }
 
 // --- Rendering ----------------------------------------------------------
-function render() {
-  if (!sheetRef.value) return;
-  let textForRender = local.text;
-  if (editingIdx.value !== null && previewBody.value !== null) {
-    const refs = getMeasureRefs();
-    if (editingIdx.value < refs.length) {
-      const lines = local.text.split('\n');
-      lines[refs[editingIdx.value].lineIdx] = previewBody.value;
-      textForRender = lines.join('\n');
-    }
+function onSheetClick(
+  abcElem: any,
+  _tn: number,
+  _classes: string,
+  _analysis: any,
+  _drag: any,
+  mouseEvent: MouseEvent
+) {
+  if (!abcElem) return;
+  const visualIdx = measureFromStartChar(lastAbc, abcElem.startChar);
+  if (visualIdx < 0 || visualIdx >= visualToSource.length) return;
+  const srcIdx = visualToSource[visualIdx];
+  const refs = getMeasureRefs();
+  if (srcIdx >= refs.length) return;
+  if (mouseEvent && typeof mouseEvent.clientY === 'number') {
+    popoverPos.top = `${window.scrollY + mouseEvent.clientY + 16}px`;
+    popoverPos.left = `${Math.max(8, window.scrollX + mouseEvent.clientX - 20)}px`;
   }
-  const result = toAbc(textForRender, {
-    title: '',
-    meter: local.meter,
-    key: local.key,
-  });
-  lastAbc = result.abc;
-  errors.value = result.errors;
-  visualToSource = [];
-  result.measures.forEach((m, srcIdx) => {
-    const span = m.multiRest ?? 1;
-    for (let k = 0; k < span; k++) visualToSource.push(srcIdx);
-  });
-  ABCJS.renderAbc(sheetRef.value, result.abc, {
-    responsive: 'resize',
-    staffwidth: 1140,
-    scale: 1.15,
-    paddingtop: 4,
-    paddingbottom: 4,
-    clickListener: (
-      abcElem: any,
-      _tn: number,
-      _classes: string,
-      _analysis: any,
-      _drag: any,
-      mouseEvent: MouseEvent
-    ) => {
-      if (!abcElem) return;
-      const visualIdx = measureFromStartChar(lastAbc, abcElem.startChar);
-      if (visualIdx < 0 || visualIdx >= visualToSource.length) return;
-      const srcIdx = visualToSource[visualIdx];
-      const refs = getMeasureRefs();
-      if (srcIdx >= refs.length) return;
-      if (mouseEvent && typeof mouseEvent.clientY === 'number') {
-        popoverPos.top = `${window.scrollY + mouseEvent.clientY + 16}px`;
-        popoverPos.left = `${Math.max(8, window.scrollX + mouseEvent.clientX - 20)}px`;
-      }
-      openPopover(srcIdx);
-    },
-  });
+  openPopover(srcIdx);
 }
 
-// Re-render whenever the doc / meter / key change.
+// abcjs warnings embed HTML (a <span> around the offending character,
+// entity-encoded context); the errors block renders escaped text.
+// Line numbers count the 5 generated header lines, so remap to body lines.
+function cleanWarning(w: string): string {
+  return w
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+    .replace(/^Music Line:(\d+)/, (m, l) => {
+      const n = Number(l) - 5;
+      return n >= 1 ? `Zeile ${n}` : m;
+    });
+}
+
+function render() {
+  if (!sheetRef.value) return;
+  const isAbc = local.mode === 'abc';
+  let abc: string;
+  if (isAbc) {
+    abc = abcHeader({ title: '', meter: local.meter, key: local.key }) + local.text + '\n';
+    errors.value = [];
+    visualToSource = [];
+  } else {
+    let textForRender = local.text;
+    if (editingIdx.value !== null && previewBody.value !== null) {
+      const refs = getMeasureRefs();
+      if (editingIdx.value < refs.length) {
+        const lines = local.text.split('\n');
+        lines[refs[editingIdx.value].lineIdx] = previewBody.value;
+        textForRender = lines.join('\n');
+      }
+    }
+    const result = toAbc(textForRender, {
+      title: '',
+      meter: local.meter,
+      key: local.key,
+    });
+    abc = result.abc;
+    errors.value = result.errors;
+    visualToSource = [];
+    result.measures.forEach((m, srcIdx) => {
+      const span = m.multiRest ?? 1;
+      for (let k = 0; k < span; k++) visualToSource.push(srcIdx);
+    });
+  }
+  lastAbc = abc;
+  try {
+    const tunes = ABCJS.renderAbc(sheetRef.value, abc, {
+      responsive: 'resize',
+      staffwidth: 1140,
+      scale: 1.15,
+      paddingtop: 4,
+      paddingbottom: 4,
+      clickListener: isAbc ? undefined : onSheetClick,
+    });
+    if (isAbc) {
+      errors.value = (tunes ?? []).flatMap((t) => t?.warnings ?? []).map(cleanWarning);
+    }
+  } catch (err) {
+    errors.value = [`ABC-Fehler: ${err instanceof Error ? err.message : String(err)}`];
+  }
+}
+
+// Re-render whenever the doc / meter / key / mode change.
 watch(
-  () => [local.text, local.meter, local.key],
+  () => [local.text, local.meter, local.key, local.mode],
   () => render(),
   { flush: 'post' }
 );
 
+// Close the measure popover before the mode switch re-renders.
+watch(
+  () => local.mode,
+  () => {
+    if (popoverVisible.value) closePopover();
+  }
+);
+
 // --- Popover ------------------------------------------------------------
 function openPopover(idx: number) {
+  if (local.mode === 'abc') return;
   const refs = getMeasureRefs();
   if (idx >= refs.length) return;
   editingIdx.value = idx;
@@ -290,6 +332,12 @@ function onKeyChange(e: Event) {
   local.key = (e.target as HTMLSelectElement).value;
   emitUpdate();
 }
+function onModeChange(e: Event) {
+  local.mode = (e.target as HTMLSelectElement).value as NotationMode;
+  // In ABC mode the drawer is the only editing surface.
+  if (local.mode === 'abc' && !drawerOpen.value) toggleDrawer();
+  emitUpdate();
+}
 
 // --- Boot ---------------------------------------------------------------
 onMounted(() => {
@@ -341,6 +389,12 @@ const measureCount = computed(() =>
           <option>Am</option><option>Em</option><option>Dm</option><option>Gm</option>
         </select>
       </span>
+      <span class="field">Modus
+        <select :value="local.mode" @change="onModeChange">
+          <option value="custom">Eigene</option>
+          <option value="abc">ABC</option>
+        </select>
+      </span>
       <span class="status" :class="{ on: saving }">
         {{ saving ? 'speichert …' : (hasFolder ? 'gespeichert' : 'lokal') }}
       </span>
@@ -371,18 +425,19 @@ const measureCount = computed(() =>
         @input="onSubtitleInput"
         @keydown.enter.prevent="($event.target as HTMLElement).blur()"
       ></div>
-      <div ref="sheetRef" class="sheet"></div>
-      <div class="hint">
+      <div ref="sheetRef" class="sheet" :class="{ static: local.mode === 'abc' }"></div>
+      <div class="hint" v-if="local.mode !== 'abc'">
         Auf einen Takt klicken zum Bearbeiten ·
         <kbd>Tab</kbd> springt zum nächsten ·
         <kbd>Enter</kbd> speichert ·
         <kbd>Esc</kbd> schließt ·
         <span class="meta">{{ measureCount }} Takte</span>
       </div>
+      <div class="hint" v-else>ABC-Modus · Noten im „Volltext“-Editor bearbeiten</div>
     </article>
 
     <section class="drawer" v-show="drawerOpen">
-      <h3>Volltext · eine Zeile pro Takt</h3>
+      <h3>{{ local.mode === 'abc' ? 'Volltext · ABC-Notation' : 'Volltext · eine Zeile pro Takt' }}</h3>
       <div class="code-block">
         <div class="gutter"><div ref="gutterRef" class="gutter-inner"></div></div>
         <textarea
@@ -394,8 +449,11 @@ const measureCount = computed(() =>
           @scroll="onBulkScroll"
         ></textarea>
       </div>
-      <div class="hint">
+      <div class="hint" v-if="local.mode !== 'abc'">
         Leere Zeilen und Kommentare (<code>%</code>) werden ignoriert.
+      </div>
+      <div class="hint" v-else>
+        Roh-ABC (Tune-Body) · Kommentare mit <code>%</code> · Leerzeilen beenden das Stück.
       </div>
     </section>
 
@@ -528,6 +586,7 @@ const measureCount = computed(() =>
 }
 
 .sheet { margin-top: 22px; cursor: pointer; }
+.sheet.static { cursor: default; }
 .sheet :deep(svg) { width: 100%; height: auto; display: block; }
 .sheet :deep(.abcjs-note_selected) { fill: var(--accent); }
 

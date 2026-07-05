@@ -284,11 +284,15 @@ export function beatUnitsFromMeter(meter: string): number {
   return 8 / den;
 }
 
+export function abcHeader(o: { title: string; meter: string; key: string }): string {
+  return `X:1\nT:${o.title}\nM:${o.meter}\nL:1/8\nK:${o.key}\n`;
+}
+
 export function toAbc(text: string, opts: ToAbcOptions = {}): ToAbcResult {
   const o = { title: 'Untitled', meter: '4/4', key: 'C', measuresPerLine: 4, ...opts };
   const beatUnits = beatUnitsFromMeter(o.meter);
   const { measures, errors } = parseLines(text, beatUnits);
-  let abc = `X:1\nT:${o.title}\nM:${o.meter}\nL:1/8\nK:${o.key}\n`;
+  let abc = abcHeader(o);
   if (measures.length > 0) {
     let body = '';
     if (measures[0].leftBar) body += measures[0].leftBar + ' ';

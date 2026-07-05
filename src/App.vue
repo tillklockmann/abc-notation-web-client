@@ -105,6 +105,7 @@ async function onNew() {
     subtitle: '',
     meter: '4/4',
     key: 'C',
+    mode: 'custom',
     text: '4p p p p',
   };
   const created = await createNotation(folder.value, blank);

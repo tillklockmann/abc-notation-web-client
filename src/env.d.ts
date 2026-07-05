@@ -8,7 +8,7 @@ declare module '*.vue' {
 
 // abcjs is loaded from CDN as window.ABCJS
 declare const ABCJS: {
-  renderAbc: (target: HTMLElement | string, abc: string, opts?: any) => any;
+  renderAbc: (target: HTMLElement | string, abc: string, opts?: any) => Array<{ warnings?: string[] }>;
 };
 
 // File System Access API – not fully in TS lib yet
