@@ -15,6 +15,7 @@ import {
   deleteNotation,
   renameNotation,
 } from './lib/storage';
+import { abcHeader } from './lib/abc';
 import { EXAMPLE_DOC, type NotationDoc, type NotationFile } from './lib/types';
 
 const supported = isSupported();
@@ -180,23 +181,39 @@ function onDocUpdate(next: NotationDoc) {
 // --- SVG export ---------------------------------------------------------
 
 function onExportSvg() {
-  const svg = document.querySelector('.editor .sheet svg') as SVGElement | null;
-  if (!svg) return;
-  const clone = svg.cloneNode(true) as SVGElement;
-  const serialized = new XMLSerializer().serializeToString(clone);
-  const blob = new Blob(
-    [`<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`],
-    { type: 'image/svg+xml;charset=utf-8' }
-  );
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  const slug = (doc.title || 'notation').replace(/[^a-z0-9_-]+/gi, '_');
-  a.download = `${slug}.svg`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // The on-screen sheet is one SVG per system (for print pagination), so
+  // re-render the whole tune off-screen into a single SVG for the file.
+  const abc = abcHeader({ title: '', meter: doc.meter, key: doc.key }) + doc.text + '\n';
+  const host = document.createElement('div');
+  host.style.position = 'fixed';
+  host.style.left = '-99999px';
+  document.body.appendChild(host);
+  try {
+    ABCJS.renderAbc(host, abc, {
+      staffwidth: 1140,
+      scale: 1.15,
+      paddingtop: 4,
+      paddingbottom: 4,
+    });
+    const svg = host.querySelector('svg');
+    if (!svg) return;
+    const serialized = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob(
+      [`<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`],
+      { type: 'image/svg+xml;charset=utf-8' }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const slug = (doc.title || 'notation').replace(/[^a-z0-9_-]+/gi, '_');
+    a.download = `${slug}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    host.remove();
+  }
 }
 </script>
 

@@ -76,13 +76,44 @@ function render() {
   if (!sheetRef.value) return;
   const abc = abcHeader({ title: '', meter: local.meter, key: local.key }) + local.text + '\n';
   try {
+    // oneSvgPerLine + CSS scaling instead of responsive:'resize': one <svg>
+    // per system lets print CSS break pages between systems, and abcjs's
+    // responsive mode sets JS-driven inline sizes that break print layout.
     const tunes = ABCJS.renderAbc(sheetRef.value, abc, {
-      responsive: 'resize',
+      oneSvgPerLine: true,
       staffwidth: 1140,
       scale: 1.15,
       paddingtop: 4,
       paddingbottom: 4,
     });
+    // abcjs sizes .sheet, the per-system wrapper divs and the svgs for the
+    // natural staff width (inline styles + width/height attributes). Strip
+    // all of it so CSS (width:100% + viewBox aspect ratio) is the single
+    // source of truth. The wrappers' overflow:hidden in particular makes
+    // Chrome cull the bottom of each CSS-scaled svg at first paint (last
+    // voice of a system missing until something forces a repaint).
+    // The wrapper heights exceed the svg heights by the inter-system
+    // spacing (%%staffsep) — keep that as percentage padding, which
+    // resolves against the width and therefore scales with the score.
+    // Padding, not margin: a percentage margin makes Chrome ignore
+    // break-inside:avoid and slice systems across print pages.
+    const el = sheetRef.value;
+    el.style.removeProperty('height');
+    el.style.removeProperty('overflow');
+    for (const div of el.querySelectorAll(':scope > div') as NodeListOf<HTMLDivElement>) {
+      const svg = div.querySelector('svg');
+      const wrapH = parseFloat(div.style.height);
+      const vb = svg?.viewBox?.baseVal;
+      if (vb && vb.width > 0 && Number.isFinite(wrapH) && wrapH > vb.height) {
+        div.style.paddingBottom = `${((wrapH - vb.height) / vb.width) * 100}%`;
+      }
+      div.style.removeProperty('height');
+      div.style.removeProperty('overflow');
+    }
+    for (const svg of el.querySelectorAll('svg')) {
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+    }
     errors.value = (tunes ?? []).flatMap((t) => t?.warnings ?? []).map(cleanWarning);
   } catch (err) {
     errors.value = [`ABC-Fehler: ${err instanceof Error ? err.message : String(err)}`];
@@ -495,6 +526,7 @@ const subtitleEmpty = computed(() => !local.subtitle);
 
 @media print {
   .editor-header, .drawer, .splitter, .hint, .errors { display: none !important; }
+  .sheet :deep(div), .sheet :deep(svg) { break-inside: avoid; page-break-inside: avoid; }
   .split { display: block; }
   .pane-page { flex: none; width: 100% !important; padding: 0; }
   .page { box-shadow: none; border: 0; max-width: none; margin: 0; padding: 12mm; }
